@@ -1,0 +1,159 @@
+* <2015-07-04 土> How can I generate SIMD code from FX100 compiler?
+
+  With this c++ source code:
+
+#+begin_src c++
+#include <stdio.h>
+
+int main () {
+  double a[4],b[4],c[4];
+
+  for (int i=0;i<4;++i) {
+    double x=1.0+i;
+    a[i]=x; b[i]=1/x/x; c[i]=x*x*x;
+  }
+
+  asm volatile("#central loop begin");
+  for (int t=0;t<1<<30;++t) {
+    for (int i=0;i<4;++i) {
+      a[i]=a[i]*b[i]+c[i];
+    }
+  }
+  asm volatile("#central loop end");
+
+  for (int i=0;i<4;++i) {
+    printf("%lf ",a[i]);
+  }
+}
+#+end_src
+
+  and with these compiler options:
+
+#+begin_src sh
+CCpx -Kfast,openmp,parallel,ocl,optmsg=2  -Nsrc,sta,lst=t hello.c -S
+FCCpx -Kfast,openmp,parallel,ocl hello.s
+#+end_src
+
+  the central loop is translated like this:
+
+#+begin_src asm
+.L194:
+
+/*     14 */    fmaddd  %f34,%f32,%f34,%f32
+
+/*     14 */    fmaddd  %f40,%f38,%f36,%f38
+
+/*     15 */    sxar1
+/*     15 */    subcc   %xg0,1,%xg0
+
+/*     14 */    fmaddd  %f46,%f44,%f42,%f44
+
+
+/*     15 */    bne,pt  %icc, .L194
+/*     15 */    fmaddd  %f52,%f50,%f48,%f50
+#+end_src
+
+  so basically, the compiler produces FMAD, but it doesn't SIMD-ize.
+
+  Next, when you write this
+
+#+begin_src c++
+  for (int t=0;t<1<<30;++t) {
+#pragma loop noalias
+#pragma loop simd
+    for (int i=0;i<4;++i) {
+      a[i]=b[i]*b[i]+c[i];
+    }
+  }
+
+#+end_src
+
+  what compiler sais is:
+
+  | jwd5208p-i  "hello.c", line 20: 変数'a'を定義する順序がわからないため、定義・参照する順序が逐次実行と異なる可能性があり、このループは並列化できません。 |
+
+  aw...
+
+  配列サイズが最低でも8ないとSIMD化されないようだ。FX100のSIMD長は4なので、8の出てくる理由は明らかではないが、Dual issueからみだろうか。
+
+  ちなみにSIMD化することで2倍以上遅くなるぞ。大丈夫かFX.
+
+#+begin_src
+[nushio@gwmpc0025 hello-simd]$ time ./a.out
+jwe1050i-w The hardware barrier couldn't be used and continues processing using the software barrier.
+taken to (standard) corrective action, execution continuing.
+1073741825.000000 10.666667 30.375000 68.266667
+real    0m3.317s
+user    0m3.270s
+sys     0m0.014s
+[nushio@gwmpc0025 hello-simd]$ time ./a.out
+jwe1050i-w The hardware barrier couldn't be used and continues processing using the software barrier.
+taken to (standard) corrective action, execution continuing.
+1073741825.000000 10.666667 30.375000 68.266667 130.208333 222.171429 350.145833 520.126984
+real    0m14.661s
+user    0m14.635s
+sys     0m0.000s
+#+end_src
+
+
+  SIMD化されたバージョンのコード。lddが入っちゃってるのが気になる。
+
+#+begin_src
+.L179:
+
+
+/*     22 */    sxar2
+/*     22 */    ldd,s   [%g3],%f32
+/*     22 */    ldd,s   [%g3+32],%f40
+
+/*     23 */    subcc   %g4,1,%g4
+
+/*     22 */    sxar2
+/*     22 */    fmaddd,s        %f32,%f36,%f34,%f32
+/*     22 */    fmaddd,s        %f40,%f42,%f38,%f40
+
+
+/*     22 */    sxar2
+/*     22 */    fmaddd,s        %f32,%f36,%f34,%f44
+/*     22 */    fmaddd,s        %f40,%f42,%f38,%f40
+
+
+/*     22 */    sxar2
+/*     22 */    std,s   %f32,[%g3]
+/*     22 */    fmaddd,s        %f44,%f36,%f34,%f44
+
+
+/*     22 */    sxar2
+/*     22 */    fmaddd,s        %f40,%f42,%f38,%f40
+/*     22 */    fmaddd,s        %f44,%f36,%f34,%f44
+
+
+/*     22 */    sxar2
+/*     22 */    fmaddd,s        %f40,%f42,%f38,%f40
+/*     22 */    std,s   %f44,[%g3]
+
+/*     22 */    sxar1
+/*     22 */    std,s   %f40,[%g3+32]
+
+/*     23 */    bpos,pt %icc, .L179
+        nop
+#+end_src
+
+
+  SIMD化されないバージョンのアセンブリ。
+
+#+begin_src
+.L295:
+
+/*     23 */    fmaddd  %f36,%f32,%f34,%f32
+
+/*     23 */    fmaddd  %f42,%f38,%f40,%f38
+
+/*     24 */    subcc   %g4,1,%g4
+
+/*     23 */    fmaddd  %f48,%f44,%f46,%f44
+
+
+/*     24 */    bne,pt  %icc, .L295
+/*     24 */    fmaddd  %f54,%f50,%f52,%f50
+#+end_src
