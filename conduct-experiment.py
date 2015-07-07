@@ -33,7 +33,7 @@ for l in pjstat_output.split('\n'):
 for tpow in range(20,30):
     t = 2**tpow
     for n in [4,8,16,32,128,24,48,96]:
-        b = SimdBenchmark(problem_size=n, max_time=tpow)
+        b = SimdBenchmark(problem_size=n, max_time=t)
         b.generate_program()
         key = b.program_filename()
         if key not in job_dict:
