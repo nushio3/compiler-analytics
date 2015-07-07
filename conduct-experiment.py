@@ -15,19 +15,22 @@ if path.exists(job_state_filename):
     with open(job_state_filename, "r") as fp:
         job_dict=yaml.load(fp)
 
-
+system('mkdir -p experiment/')
 pjstat_output, _ = system_communicate('ssh nushio@greatwave.riken.jp pjstat')
-system('rsync -avz nushio@greatwave.riken.jp:~/experiment/ experiment/')
+system('rsync -az nushio@greatwave.riken.jp:~/experiment/ experiment/')
 
 running_jobids = []
 
 after_jobid_symbol=False
 for l in pjstat_output.split('\n'):
     ws = l.split()
+    if ws != []: print ws[0]
     if after_jobid_symbol:
-        if 0 in ws: running_jobids.append(ws[0])
-    if 0 in ws and ws[0]=='JOB_ID':
+        if len(ws)>=1 : running_jobids.append(ws[0])
+    if 'JOB_ID' in ws:
         after_jobid_symbol=True
+
+print running_jobids
 
 
 for tpow in range(20,30):
@@ -42,6 +45,8 @@ for tpow in range(20,30):
 new_dict={}
 
 for key,job in job_dict.iteritems():
+    print job.job_state, key
+
     st0 = job.job_state
     dir0 = job.program_directory()
 
@@ -69,7 +74,7 @@ with open('job_state.yaml', "w") as fp:
     yaml.dump(new_dict,fp)
 
 
-system('rsync -avz experiment/ nushio@greatwave.riken.jp:~/experiment/')
+system('rsync -az experiment/ nushio@greatwave.riken.jp:~/experiment/')
 
 
 
